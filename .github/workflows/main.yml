@@ -1,0 +1,24 @@
+- name: Download and Run RustDesk with ID Logging
+  run: |
+    Invoke-WebRequest -Uri "https://github.com/rustdesk/rustdesk/releases/latest/download/rustdesk-1.3.9-x86_64.exe" -OutFile "rustdesk.exe"
+    Start-Process -FilePath "rustdesk.exe"
+    Start-Sleep -Seconds 10  # Wait a bit for config to generate
+
+    # Try to read ID and password
+    $configPath = "$env:APPDATA\RustDesk\config\RustDesk\"
+    $idFile = Join-Path $configPath "id"
+    $pwdFile = Join-Path $configPath "passwd"
+
+    if (Test-Path $idFile) {
+      $id = Get-Content $idFile
+      Write-Host "RustDesk ID: $id"
+    } else {
+      Write-Host "Could not find ID file at $idFile"
+    }
+
+    if (Test-Path $pwdFile) {
+      $pwd = Get-Content $pwdFile
+      Write-Host "RustDesk Password: $pwd"
+    } else {
+      Write-Host "Could not find password file at $pwdFile"
+    }
