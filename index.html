@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>FitMirror Professional Demo - Sketchfab Models</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- Three.js, GLTFLoader, OrbitControls -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.112.1/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.112.1/examples/js/loaders/GLTFLoader.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.112.1/examples/js/controls/OrbitControls.js"></script>
+  <!-- TensorFlow and Pose Detection -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection"></script>
+  <style>
+    /* Basic reset & full-screen layout */
+    body, html {
+      margin: 0;
+      padding: 0;
+      background: #000;
+      color: #fff;
+      font-family: Arial, sans-serif;
+      overflow: hidden;
+    }
+    .screen {
+      display: none;
+      width: 100vw;
+      height: 100vh;
+      position: absolute;
+      top: 0;
+      left: 0;
+      overflow: auto;
+      background: #000;
+      padding: 20px;
+      box-sizing: border-box;
+    }
+    .active { display: block; }
+    .form-section {
+      max-width: 400px;
+      margin: 5vh auto;
+      text-align: center;
+      background: rgba(30,30,30,0.8);
+      padding: 20px;
+      border-radius: 10px;
+    }
+    label, input, select, button {
+      display: block;
+      width: 90%;
+      margin: 10px auto;
+      font-size: 1em;
+      padding: 10px;
+      border-radius: 5px;
+    }
+    input, select {
+      background: #333;
+      color: #fff;
+      border: 1px solid #555;
+    }
+    button {
+      background: #007bff;
+      color: white;
+      border: none;
+      cursor: pointer;
+      transition: background-color 0.3s ease;
+    }
+    button:hover { background: #0056b3; }
+    #three-canvas {
+      width: 100vw;
+      height: 100vh;
+      display: block;
+      position: absolute;
+      top: 0;
+      left: 0;
+      z-index: 1;
+    }
+    #ui-overlay {
+      position: absolute;
+      top: 15px;
+      left: 15px;
+      z-index: 10;
+      background: rgba(0,0,0,0.7);
+      padding: 15px;
+      border-radius: 8px;
+      font-size: 1em;
+      color: #eee;
+    }
+    #ui-overlay div { margin-bottom: 8px; }
+    #ui-overlay button {
+      display: inline-block;
+      width: auto;
+      margin: 5px 5px 5px 0;
+      padding: 8px 15px;
+      font-size: 0.9em;
+    }
+    #webcam {
+      position: absolute;
+      top: 0;
+      left: 0;
+      visibility: hidden;
+    }
+    #status { font-weight: bold; }
+    #poseDisplay { font-style: italic; }
+  </style>
+</head>
+<body>
+  <!-- Screen 1: Onboarding -->
+  <div id="screen1" class="screen active">
+    <div class="form-section">
+      <h2>Welcome to FitMirror</h2>
+      <p>Please provide some details to personalize your experience.</p>
+      <label for="genderSelect">Select Gender:</label>
+      <select id="genderSelect">
+        <option value="male">Male</option>
+        <option value="female">Female</option>
+        <option value="other">Other</option>
+      </select>
+      <label for="ageInput">Age:</label>
+      <input type="number" id="ageInput" placeholder="Enter your age" min="1">
+      <label for="weightInput">Weight (kg):</label>
+      <input type="number" id="weightInput" placeholder="Enter your weight" min="1">
+      <label for="bodyType">Body Type:</label>
+      <select id="bodyType">
+        <option value="slim">Slim</option>
+        <option value="average">Average</option>
+        <option value="muscular">Muscular</option>
+      </select>
+      <button onclick="goToScreen(2)">Next</button>
+    </div>
+  </div>
+
+  <!-- Screen 2: Workout Goals -->
+  <div id="screen2" class="screen">
+    <div class="form-section">
+      <h2>Set Your Workout Goal</h2>
+      <p>Define your targets for this session.</p>
+      <label for="durationInput">Workout Duration (minutes):</label>
+      <input type="number" id="durationInput" placeholder="e.g., 30" min="1">
+      <label for="calorieInput">Calorie Burn Goal:</label>
+      <input type="number" id="calorieInput" placeholder="e.g., 300" min="0">
+      <button onclick="goToScreen(3)">Start Workout</button>
+    </div>
+  </div>
+
+  <!-- Screen 3: Workout (3D Scene & Pose Detection) -->
+  <div id="screen3" class="screen">
+    <canvas id="three-canvas"></canvas>
+    <div id="ui-overlay">
+      <div id="status">Initializing...</div>
+      <button id="musicControl" onclick="toggleMusic()">Play Music</button>
+      <button onclick="endWorkout()">End Workout</button>
+      <div id="batteryDisplay">Battery: 0%</div>
+      <div id="poseDisplay">Pose: Waiting for Webcam...</div>
+      <div id="repCountDisplay">Reps: 0</div>
+      <div id="calorieCountDisplay">Calories: 0</div>
+    </div>
+    <video id="webcam" autoplay playsinline muted width="640" height="480"></video>
+    <audio id="bgMusic" loop>
+      <source src="https://cdn.pixabay.com/audio/2022/08/03/audio_54ca0ffa52.mp3" type="audio/mpeg">
+      Your browser does not support audio.
+    </audio>
+  </div>
+
+  <!-- Screen 4: Summary -->
+  <div id="screen4" class="screen">
+    <div class="form-section">
+      <h2>Workout Summary</h2>
+      <div id="summaryDisplay"><p>Calculating summary...</p></div>
+      <button onclick="restartApp()">Restart</button>
+    </div>
+  </div>
+
+  <script>
+    // ------------------ GLOBAL VARIABLES ------------------
+    let userData = {
+      gender: 'male',
+      age: null,
+      weight: null,
+      bodyType: null,
+      duration: null,
+      calorieGoal: null,
+      startTime: null,
+      endTime: null
+    };
+    let scene, camera, renderer, controls, model;
+    let musicPlaying = false;
+    let coachInterval, batteryInterval, metricsInterval;
+    let batteryLevel = 0;
+    let detector, video;
+    let bones = {};
+    let animationFrameId, poseDetectionIntervalId;
+    let repCount = 0, calorieCount = 0;
+
+    // ------------------ BONE MAPPING ------------------
+    // Update these names to match your Sketchfab model's bone names if needed.
+    const BONE_MAPPING = {
+      Hips: 'Bip001',
+      Spine: 'Bip001_Spine',
+      Neck: 'Bip001_Neck',
+      Head: 'Bip001_Head',
+      LeftShoulder: 'Bip001_L_UpperArm',
+      LeftArm: 'Bip001_L_UpperArm',
+      LeftForeArm: 'Bip001_L_ForeArm',
+      LeftHand: 'Bip001_L_Hand',
+      RightShoulder: 'Bip001_R_UpperArm',
+      RightArm: 'Bip001_R_UpperArm',
+      RightForeArm: 'Bip001_R_ForeArm',
+      RightHand: 'Bip001_R_Hand',
+      LeftUpLeg: 'Bip001_L_UpperLeg',
+      LeftLeg: 'Bip001_L_LowerLeg',
+      LeftFoot: 'Bip001_L_Foot',
+      RightUpLeg: 'Bip001_R_UpperLeg',
+      RightLeg: 'Bip001_R_LowerLeg',
+      RightFoot: 'Bip001_R_Foot'
+    };
+
+    const POSE_CONFIDENCE_THRESHOLD = 0.3;
+    const SMOOTHING_FACTOR = 0.2;
+
+    // ------------------ SCREEN NAVIGATION ------------------
+    function goToScreen(num) {
+      if (num !== 3) {
+         cancelAnimationFrame(animationFrameId);
+         clearTimeout(poseDetectionIntervalId);
+         if (detector) { detector.dispose(); detector = null; }
+         stopCoach();
+         if (musicPlaying) toggleMusic();
+         if (video && video.srcObject) {
+           video.srcObject.getTracks().forEach(track => track.stop());
+           video.srcObject = null;
+         }
+      }
+      document.querySelectorAll('.screen').forEach(screen => screen.classList.remove('active'));
+      document.getElementById('screen' + num).classList.add('active');
+      if (num === 2) {
+        userData.gender = document.getElementById('genderSelect').value;
+        userData.age = parseInt(document.getElementById('ageInput').value) || null;
+        userData.weight = parseFloat(document.getElementById('weightInput').value) || null;
+        userData.bodyType = document.getElementById('bodyType').value;
+        console.log("Demographics:", userData);
+      }
+      if (num === 3) {
+        userData.duration = parseInt(document.getElementById('durationInput').value) || 30;
+        userData.calorieGoal = parseInt(document.getElementById('calorieInput').value) || 300;
+        startWorkout();
+      }
+      if (num === 4) { displaySummary(); }
+    }
+
+    function restartApp() { location.reload(); }
+
+    // ------------------ BACKGROUND MUSIC ------------------
+    function toggleMusic() {
+      const audio = document.getElementById('bgMusic');
+      const button = document.getElementById('musicControl');
+      if (musicPlaying) { audio.pause(); button.innerText = "Play Music"; }
+      else {
+        audio.play().then(() => { button.innerText = "Pause Music"; })
+          .catch(error => { console.error("Audio play failed:", error);
+                           document.getElementById('status').innerText = "Click 'Play Music' again."; 
+                           musicPlaying = !musicPlaying; });
+      }
+      musicPlaying = !musicPlaying;
+    }
+
+    // ------------------ MOTIVATIONAL AI COACH ------------------
+    function startCoach() {
+      const phrases = [
+        "Keep going, you're doing great!", "Focus on your form!",
+        "Push a little harder!", "You've got this!",
+        "Almost there, stay strong!", "Consistency is key!",
+        "Great job, keep it up!", "Feel the burn!"
+      ];
+      let i = 0;
+      stopCoach();
+      if ('speechSynthesis' in window) {
+        coachInterval = setInterval(() => {
+          try {
+            const utterance = new SpeechSynthesisUtterance(phrases[i % phrases.length]);
+            speechSynthesis.speak(utterance);
+            i++;
+          } catch (e) {
+            console.warn("Speech synthesis error:", e);
+            stopCoach();
+          }
+        }, 30000);
+      } else {
+          console.warn("Speech synthesis not supported.");
+      }
+    }
+    function stopCoach() {
+      if (coachInterval) clearInterval(coachInterval);
+      coachInterval = null;
+      if ('speechSynthesis' in window) speechSynthesis.cancel();
+    }
+
+    // ------------------ BATTERY SIMULATION ------------------
+    function startBatterySim() {
+      stopBatterySim();
+      batteryLevel = 100;
+      document.getElementById('batteryDisplay').innerText = `Battery: ${batteryLevel}%`;
+      batteryInterval = setInterval(() => {
+          batteryLevel = Math.max(0, batteryLevel - (1 / (userData.duration * 60 / 10)));
+          document.getElementById('batteryDisplay').innerText = `Battery: ${batteryLevel.toFixed(0)}%`;
+          if (batteryLevel <= 0) { stopBatterySim(); }
+      }, 10000);
+    }
+    function stopBatterySim() {
+      if (batteryInterval) clearInterval(batteryInterval);
+      batteryInterval = null;
+    }
+
+    // ------------------ REP/CALORIE SIMULATION ------------------
+    function startMetricsSim() {
+      stopMetricsSim();
+      repCount = 0;
+      calorieCount = 0;
+      document.getElementById('repCountDisplay').innerText = `Reps: ${repCount}`;
+      document.getElementById('calorieCountDisplay').innerText = `Calories: ${calorieCount.toFixed(0)}`;
+      metricsInterval = setInterval(() => {
+          const mets = 5;
+          const weightKg = userData.weight || 70;
+          const minutesElapsed = (Date.now() - userData.startTime) / 60000;
+          calorieCount = (mets * 3.5 * weightKg / 200) * minutesElapsed;
+          document.getElementById('calorieCountDisplay').innerText = `Calories: ${calorieCount.toFixed(0)}`;
+          if (userData.duration && minutesElapsed >= userData.duration) {
+              console.log("Workout duration reached.");
+              endWorkout();
+          }
+      }, 1000);
+    }
+    function stopMetricsSim() {
+      if (metricsInterval) clearInterval(metricsInterval);
+      metricsInterval = null;
+    }
+
+    // ------------------ THREE.JS 3D SCENE ------------------
+    function init3D() {
+      userData.startTime = Date.now();
+      bones = {};
+      const canvas = document.getElementById("three-canvas");
+      try {
+        renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, alpha: true });
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.outputEncoding = THREE.sRGBEncoding;
+        renderer.shadowMap.enabled = true;
+      } catch (error) {
+        console.error("Renderer error:", error);
+        document.getElementById('status').innerText = "Renderer error";
+        return;
+      }
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x333344);
+      scene.fog = new THREE.Fog(0x333344, 5, 15);
+      camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 100);
+      camera.position.set(0, 1.5, 4);
+      controls = new THREE.OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.05;
+      controls.target.set(0, 1, 0);
+      controls.update();
+      const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0.8);
+      hemiLight.position.set(0, 20, 0);
+      scene.add(hemiLight);
+      const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
+      dirLight.position.set(3, 10, 10);
+      dirLight.castShadow = true;
+      dirLight.shadow.mapSize.width = 1024;
+      dirLight.shadow.mapSize.height = 1024;
+      scene.add(dirLight);
+      scene.add(dirLight.target);
+      const ambientLight = new THREE.AmbientLight(0x404040);
+      scene.add(ambientLight);
+      const ground = new THREE.Mesh(
+        new THREE.PlaneGeometry(20, 20),
+        new THREE.MeshStandardMaterial({ color: 0x808080, depthWrite: false })
+      );
+      ground.rotation.x = -Math.PI / 2;
+      ground.receiveShadow = true;
+      scene.add(ground);
+      // Use your Sketchfab models hosted on Netlify (or GitHub Pages) in the "models" folder.
+      const maleModelUrl = "models/maleModel.glb";
+      const femaleModelUrl = "models/femaleModel.glb";
+      const modelUrl = (userData.gender === 'female') ? femaleModelUrl : maleModelUrl;
+      document.getElementById("status").innerText = "Loading 3D Model...";
+      console.log("Loading model from:", modelUrl);
+      const loader = new THREE.GLTFLoader();
+      loader.load(modelUrl, (gltf) => {
+        model = gltf.scene;
+        model.scale.set(1, 1, 1);
+        model.position.set(0, 0, 0);
+        model.traverse((node) => {
+          if (node.isMesh) node.castShadow = true;
+        });
+        scene.add(model);
+        console.log("Model loaded successfully.", model);
+        document.getElementById("status").innerText = "Model Ready";
+        findBones(model);
+        if (!bones[BONE_MAPPING.Hips]) {
+          console.warn("Essential bones not found. Check BONE_MAPPING.");
+          document.getElementById("status").innerText = "Model Loaded (Bone mapping issues)";
+        }
+        animate();
+        initPoseDetection();
+      }, (xhr) => {
+        const progress = ((xhr.loaded / xhr.total) * 100).toFixed(0);
+        document.getElementById("status").innerText = `Loading Model: ${progress}%`;
+      }, (error) => {
+        console.error("Model load error:", error);
+        document.getElementById("status").innerText = "Error Loading Model";
+      });
+      startCoach();
+      startBatterySim();
+      startMetricsSim();
+      toggleMusic();
+      window.addEventListener("resize", onWindowResize, false);
+    }
+
+    function animate() {
+      animationFrameId = requestAnimationFrame(animate);
+      controls.update();
+      renderer.render(scene, camera);
+    }
+
+    function onWindowResize() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    // ------------------ FIND BONES ------------------
+    function findBones(modelRoot) {
+      bones = {};
+      modelRoot.traverse((node) => {
+        if (node.isBone) {
+          for (const key in BONE_MAPPING) {
+            if (node.name === BONE_MAPPING[key]) {
+              bones[BONE_MAPPING[key]] = node;
+              break;
+            }
+          }
+        }
+      });
+      console.log("Bone discovery complete. Found:", Object.keys(bones).length, "mapped bones.");
+    }
+
+    // ------------------ POSE DETECTION & MIMICRY ------------------
+    async function initPoseDetection() {
+      video = document.getElementById("webcam");
+      document.getElementById('poseDisplay').innerText = "Requesting Webcam...";
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: 640, height: 480 },
+          audio: false
+        });
+        video.srcObject = stream;
+        video.onloadedmetadata = () => {
+          video.play();
+          console.log("Webcam stream started.");
+          loadPoseDetector();
+        };
+      } catch (e) {
+        console.error("Error accessing webcam:", e);
+        document.getElementById('status').innerText = "Webcam Access Denied/Failed";
+        document.getElementById('poseDisplay').innerText = "Error: Webcam required.";
+        alert("Error accessing webcam: " + e.message + "\nPlease ensure camera permissions are granted.");
+        return;
+      }
+    }
+
+    async function loadPoseDetector() {
+      document.getElementById('status').innerText = "Loading Pose Model...";
+      try {
+        await tf.setBackend("webgl");
+        console.log(`Using TF Backend: ${tf.getBackend()}`);
+        const modelType = poseDetection.movenet.modelType.MULTIPOSE_LIGHTNING;
+        detector = await poseDetection.createDetector(poseDetection.SupportedModels.MoveNet, { modelType: modelType });
+        document.getElementById('status').innerText = "Ready";
+        document.getElementById('poseDisplay').innerText = "Detecting Pose...";
+        console.log("MoveNet detector loaded.");
+        detectPoseLoop();
+      } catch (error) {
+        console.error("Error loading pose detector:", error);
+        document.getElementById('status').innerText = "Failed to load pose model.";
+        document.getElementById('poseDisplay').innerText = "Error: Pose model failed.";
+      }
+    }
+
+    async function detectPoseLoop() {
+      if (!detector || !model || !video || video.readyState < 3) {
+        console.log("Detector, model, or video not ready. Retrying...");
+        poseDetectionIntervalId = setTimeout(detectPoseLoop, 100);
+        return;
+      }
+      try {
+        const poses = await detector.estimatePoses(video, { maxPoses: 1, flipHorizontal: false });
+        if (poses.length > 0 && bones) {
+          document.getElementById('poseDisplay').innerText = "Tracking...";
+          const keypoints = poses[0].keypoints.reduce((acc, kp) => {
+            if (kp.name) acc[kp.name] = kp;
+            return acc;
+          }, {});
+          // --- Apply Pose to Bones ---
+          applyPoseToBone(keypoints, 'left_shoulder', 'left_elbow', BONE_MAPPING.LeftArm, 'z', -Math.PI / 2);
+          applyPoseToBone(keypoints, 'left_elbow', 'left_wrist', BONE_MAPPING.LeftForeArm, 'z', -Math.PI / 2);
+          applyPoseToBone(keypoints, 'right_shoulder', 'right_elbow', BONE_MAPPING.RightArm, 'z', Math.PI / 2, true);
+          applyPoseToBone(keypoints, 'right_elbow', 'right_wrist', BONE_MAPPING.RightForeArm, 'z', Math.PI / 2, true);
+          applyPoseToBone(keypoints, 'left_hip', 'left_knee', BONE_MAPPING.LeftUpLeg, 'z', -Math.PI / 2);
+          applyPoseToBone(keypoints, 'left_hip', 'left_knee', BONE_MAPPING.LeftUpLeg, 'x', -Math.PI / 2);
+          applyPoseToBone(keypoints, 'left_knee', 'left_ankle', BONE_MAPPING.LeftLeg, 'x', 0);
+          applyPoseToBone(keypoints, 'right_hip', 'right_knee', BONE_MAPPING.RightUpLeg, 'z', Math.PI / 2, true);
+          applyPoseToBone(keypoints, 'right_hip', 'right_knee', BONE_MAPPING.RightUpLeg, 'x', -Math.PI / 2);
+          applyPoseToBone(keypoints, 'right_knee', 'right_ankle', BONE_MAPPING.RightLeg, 'x', 0);
+          // Optional: Head tracking
+          const neck = bones[BONE_MAPPING.Neck];
+          const nose = keypoints['nose'];
+          const leftEar = keypoints['left_ear'];
+          const rightEar = keypoints['right_ear'];
+          if (neck && nose && nose.score > POSE_CONFIDENCE_THRESHOLD && leftEar && rightEar && leftEar.score > POSE_CONFIDENCE_THRESHOLD && rightEar.score > POSE_CONFIDENCE_THRESHOLD) {
+              const headTilt = calculateAngle(rightEar, leftEar);
+              neck.rotation.z = lerp(neck.rotation.z, headTilt, SMOOTHING_FACTOR);
+              const faceWidth = Math.abs(leftEar.x - rightEar.x);
+              const noseCenterX = (leftEar.x + rightEar.x) / 2;
+              const yawFactor = (nose.x - noseCenterX) / (faceWidth / 2);
+              neck.rotation.y = lerp(neck.rotation.y, yawFactor * 0.5, SMOOTHING_FACTOR);
+          }
+        } else {
+          document.getElementById('poseDisplay').innerText = "Detecting Pose...";
+        }
+      } catch (error) {
+        console.error("Error during pose estimation:", error);
+      }
+      poseDetectionIntervalId = setTimeout(detectPoseLoop, 30);
+    }
+
+    function applyPoseToBone(keypoints, kpName1, kpName2, boneName, axis, angleOffset = 0, invert = false) {
+      const bone = bones[boneName];
+      const p1 = keypoints[kpName1];
+      const p2 = keypoints[kpName2];
+      if (bone && p1 && p2 && p1.score > POSE_CONFIDENCE_THRESHOLD && p2.score > POSE_CONFIDENCE_THRESHOLD) {
+          let angle = calculateAngle(p1, p2);
+          angle += angleOffset;
+          if (invert) { angle *= -1; }
+          bone.rotation[axis] = lerp(bone.rotation[axis], angle, SMOOTHING_FACTOR);
+      }
+    }
+
+    function calculateAngle(p1, p2) {
+      return Math.atan2(p2.y - p1.y, p2.x - p1.x);
+    }
+
+    function lerp(start, end, t) {
+      return start * (1 - t) + end * t;
+    }
+
+    // ------------------ END WORKOUT & SUMMARY ------------------
+    function endWorkout() {
+      console.log("Ending workout...");
+      userData.endTime = Date.now();
+      cancelAnimationFrame(animationFrameId);
+      clearTimeout(poseDetectionIntervalId);
+      stopCoach();
+      stopBatterySim();
+      stopMetricsSim();
+      if (detector) {
+         detector.dispose();
+         detector = null;
+         console.log("Pose detector disposed.");
+      }
+      if (video?.srcObject) {
+         video.srcObject.getTracks().forEach(track => track.stop());
+         video.srcObject = null;
+         console.log("Webcam stopped.");
+      }
+      if (musicPlaying) { toggleMusic(); }
+      goToScreen(4);
+    }
+
+    function displaySummary() {
+      const summaryDiv = document.getElementById('summaryDisplay');
+      if (!userData.startTime) {
+          summaryDiv.innerHTML = "<p>No workout data recorded.</p>";
+          return;
+      }
+      const workoutDurationMs = (userData.endTime || Date.now()) - userData.startTime;
+      const durationMinutes = (workoutDurationMs / 60000).toFixed(1);
+      const finalCalories = calorieCount.toFixed(0);
+      summaryDiv.innerHTML = `
+          <h3>Workout Complete!</h3>
+          <p><strong>Duration:</strong> ${durationMinutes} minutes</p>
+          <p><strong>Calories Burned:</strong> ${finalCalories} (estimated)</p>
+          <p><strong>Reps Completed:</strong> ${repCount} (simulated)</p>
+          <hr>
+          <h4>Initial Goals:</h4>
+          <p>Target Duration: ${userData.duration || 'N/A'} min</p>
+          <p>Target Calories: ${userData.calorieGoal || 'N/A'}</p>
+          <hr>
+          <h4>User Info:</h4>
+          <p>Age: ${userData.age || 'N/A'}, Weight: ${userData.weight || 'N/A'} kg, Gender: ${userData.gender || 'N/A'}, Body Type: ${userData.bodyType || 'N/A'}</p>
+      `;
+    }
+
+    // ------------------ GLOBAL START WORKOUT FUNCTION ------------------
+    function startWorkout() {
+      console.log("Starting workout session...");
+      console.log("Goals:", { duration: userData.duration, calorieGoal: userData.calorieGoal });
+      init3D();
+    }
+
+    // ------------------ INITIAL SETUP ------------------
+    window.onload = () => {
+      document.querySelectorAll('.screen').forEach((screen, index) => {
+        if (index === 0) screen.classList.add('active'); else screen.classList.remove('active');
+      });
+      video = document.getElementById("webcam");
+      if (window.location.protocol !== "https:") {
+        console.warn("Webcam access typically requires HTTPS.");
+        alert("Warning: Webcam access might fail if not served over HTTPS.");
+      }
+    };
+  </script>
+</body>
+</html>
